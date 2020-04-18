@@ -104,9 +104,7 @@ module Ewelink
 
     def switches
       @switches ||= [].tap do |switches|
-        switch_devices = devices.select { |device| SWITCH_DEVICES_UIIDS.include?(device['uiid']) }.tap do |devices|
-          Ewelink.logger.debug(self.class.name) { "Found #{devices.size} switch device(s)" }
-        end
+        switch_devices = devices.select { |device| SWITCH_DEVICES_UIIDS.include?(device['uiid']) }
         switch_devices.each do |device|
           device_id = device['deviceid'].presence || next
           name = device['name'].presence || next
