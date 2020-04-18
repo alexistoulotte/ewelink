@@ -77,18 +77,6 @@ module Ewelink
       end.tap { |buttons| Ewelink.logger.debug(self.class.name) { "Found #{buttons.size} RF 433MHz bridge button(s)" } }
     end
 
-    def switch_off!(uuid)
-      update_switch_on!(uuid, false)
-    end
-
-    def switch_off?(uuid)
-      !switch_on?(uuid)
-    end
-
-    def switch_on!(uuid)
-      update_switch_on!(uuid, true)
-    end
-
     def switch_on?(uuid)
       switch = find_switch!(uuid)
       params = {
@@ -116,6 +104,27 @@ module Ewelink
           switches << switch
         end
       end.tap { |switches| Ewelink.logger.debug(self.class.name) { "Found #{switches.size} switch(es)" } }
+    end
+
+    def turn_switch!(uuid, on)
+      if ['on', :on, 'true'].include?(on)
+        on = true
+      elsif ['off', :off, 'false'].include?(on)
+        on = false
+      end
+      switch = find_switch!(uuid)
+      params = {
+        'appid' => APP_ID,
+        'deviceid' => switch[:device_id],
+        'nonce' => nonce,
+        'params' => {
+          'switch' => on ? 'on' : 'off',
+        },
+        'ts' => Time.now.to_i,
+        'version' => VERSION,
+      }
+      http_request(:post, '/api/user/device/status', body: JSON.generate(params), headers: authentication_headers)
+      true
     end
 
     private
@@ -201,22 +210,6 @@ module Ewelink
 
     def synchronize(name, &block)
       (@mutexs[name] ||= Mutex.new).synchronize(&block)
-    end
-
-    def update_switch_on!(uuid, on)
-      switch = find_switch!(uuid)
-      params = {
-        'appid' => APP_ID,
-        'deviceid' => switch[:device_id],
-        'nonce' => nonce,
-        'params' => {
-          'switch' => on ? 'on' : 'off',
-        },
-        'ts' => Time.now.to_i,
-        'version' => VERSION,
-      }
-      http_request(:post, '/api/user/device/status', body: JSON.generate(params), headers: authentication_headers)
-      true
     end
 
   end

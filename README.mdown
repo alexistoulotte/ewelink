@@ -40,24 +40,30 @@ api.rf_bridge_buttons.each do |button|
 end
 ```
 
-### Set switch on or off
+### Turn switch on or off
 
 ```ruby
 require 'ewelink'
 
 api = Ewelink::Api.new(phone_number: '+687 414243', password: 'secr$t')
-api.switch_on!(switch[:uuid])
-api.switch_off!(switch[:uuid])
+api.turn_switch!(switch[:uuid], :on)
+api.turn_switch!(switch[:uuid], :off)
 ```
 
-### Check if switch is on or off
+Or :
+
+```ruby
+api.turn_switch!(switch[:uuid], true)
+api.turn_switch!(switch[:uuid], false)
+```
+
+### Check if switch is on
 
 ```ruby
 require 'ewelink'
 
 api = Ewelink::Api.new(phone_number: '+687 414243', password: 'secr$t')
 puts api.switch_on?(switch[:uuid])
-puts api.switch_off?(switch[:uuid])
 ```
 
 ### Press RF bridge button

@@ -6,8 +6,8 @@ module Ewelink
       api = Api.new(options.slice(:email, :password, :phone_number))
       puts(JSON.pretty_generate(api.switches)) if options[:list_switches]
       puts(JSON.pretty_generate(api.rf_bridge_buttons)) if options[:list_rf_bridge_buttons]
-      options[:switches_on_uuids].each { |uuid| api.switch_on!(uuid) }
-      options[:switches_off_uuids].each { |uuid| api.switch_off!(uuid) }
+      options[:turn_switches_on_uuids].each { |uuid| api.turn_switch!(uuid, :on) }
+      options[:turn_switches_off_uuids].each { |uuid| api.turn_switch!(uuid, :off) }
       options[:press_rf_bridge_buttons_uuids].each { |uuid| api.press_rf_bridge_button!(uuid) }
     end
 
@@ -15,7 +15,7 @@ module Ewelink
 
     def options
       @options ||= begin
-        options = { press_rf_bridge_buttons_uuids: [], switches_off_uuids: [], switches_on_uuids: [] }
+        options = { press_rf_bridge_buttons_uuids: [], turn_switches_off_uuids: [], turn_switches_on_uuids: [] }
         parser = OptionParser.new do |opts|
           opts.banner = 'Manage eWeLink smart home devices'
           opts.version = File.read(File.expand_path('../../VERSION', __dir__)).strip
@@ -37,11 +37,11 @@ module Ewelink
           opts.on('--list-rf-bridge-buttons', 'List all RF 433MHz bridge buttons in JSON format') do
             options[:list_rf_bridge_buttons] = true
           end
-          opts.on('--switch-on SWITCH_UUID', 'Set the switch with specified UUID on') do |uuid|
-            options[:switches_on_uuids] << uuid
+          opts.on('--turn-switch-on SWITCH_UUID', 'Turn the switch with specified UUID on') do |uuid|
+            options[:turn_switches_on_uuids] << uuid
           end
-          opts.on('--switch-off SWITCH_UUID', 'Set the switch with specified UUID off') do |uuid|
-            options[:switches_off_uuids] << uuid
+          opts.on('--turn-switch-off SWITCH_UUID', 'Turn the switch with specified UUID off') do |uuid|
+            options[:turn_switches_off_uuids] << uuid
           end
           opts.on('--press-rf-bridge-button BUTTON_UUID', 'Press RF 433MHz bridge button with specified UUID') do |uuid|
             options[:press_rf_bridge_buttons_uuids] << uuid
@@ -61,7 +61,7 @@ module Ewelink
           STDERR.puts(parser.summarize)
           exit(1)
         end
-        if [:list_switches, :list_rf_bridge_buttons, :switches_on_uuids, :switches_off_uuids, :press_rf_bridge_buttons_uuids].map { |action| options[action] }.all?(&:blank?)
+        if [:list_switches, :list_rf_bridge_buttons, :turn_switches_on_uuids, :turn_switches_off_uuids, :press_rf_bridge_buttons_uuids].map { |action| options[action] }.all?(&:blank?)
           STDERR.puts('An action must be specified (listing switches, press RF bridge button, etc.)')
           STDERR.puts(parser.summarize)
           exit(1)
