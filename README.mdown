@@ -1,0 +1,84 @@
+# Ewelink
+
+Ruby API to manage eWeLink smart home devices.
+
+## Installation
+
+Just add this into your `Gemfile`:
+
+```ruby
+gem 'ewelink'
+```
+
+Then, just run `bundle install`.
+
+## Examples
+
+### Displaying all switches
+
+```ruby
+require 'ewelink'
+
+api = Ewelink::Api.new(email: 'john@example.com', password: 'secr$t')
+api.switches.each do |switch|
+  puts switch[:name]
+  puts switch[:uuid]
+end
+```
+
+`email` or `phone_number` must be specified for authentication.
+
+### Displaying all RF bridge buttons
+
+```ruby
+require 'ewelink'
+
+api = Ewelink::Api.new(email: 'john@example.com', password: 'secr$t')
+api.rf_bridge_buttons.each do |button|
+  puts button[:name]
+  puts button[:uuid]
+end
+```
+
+### Set switch on or off
+
+```ruby
+require 'ewelink'
+
+api = Ewelink::Api.new(phone_number: '+687 414243', password: 'secr$t')
+api.switch_on!(switch[:uuid])
+api.switch_off!(switch[:uuid])
+```
+
+### Check if switch is on or off
+
+```ruby
+require 'ewelink'
+
+api = Ewelink::Api.new(phone_number: '+687 414243', password: 'secr$t')
+puts api.switch_on?(switch[:uuid])
+puts api.switch_off?(switch[:uuid])
+```
+
+### Press RF bridge button
+
+```ruby
+require 'ewelink'
+
+api = Ewelink::Api.new(email: 'john@example.com', password: 'secr$t')
+api.press_rf_bridge_button!(button[:uuid])
+```
+
+### Configuring logger
+
+In order to have some debug informations about what kagu does, you could
+configure its logger:
+
+```ruby
+Ewelink.logger = Logger.new(STDERR)
+```
+
+### Executable
+
+This gem also provides a `ewelink` executable, just run it with
+`--help` option to get all available options.

@@ -1,0 +1,17 @@
+#! /usr/bin/env ruby
+
+require_relative '../lib/ewelink'
+
+Ewelink.logger = Logger.new(STDOUT, formatter: -> (severity, time, progname, message) {
+  text = ''
+  text << "[#{progname}] " if progname.present?
+  text << message.to_s << "\n"
+})
+Ewelink.logger.level = :warn
+
+begin
+  Ewelink::Runner.new.run
+rescue => e
+  Ewelink.logger.fatal(Ewelink::Runner.name) { e }
+  exit(1)
+end
