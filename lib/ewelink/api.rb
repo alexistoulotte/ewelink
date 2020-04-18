@@ -23,20 +23,22 @@ module Ewelink
     end
 
     def press_rf_bridge_button!(uuid)
-      button = find_rf_bridge_button!(uuid)
-      params = {
-        'appid' => APP_ID,
-        'deviceid' => button[:device_id],
-        'nonce' => nonce,
-        'params' => {
-          'cmd' => 'transmit',
-          'rfChl' => button[:channel],
-        },
-        'ts' => Time.now.to_i,
-        'version' => VERSION,
-      }
-      http_request(:post, '/api/user/device/status', body: JSON.generate(params), headers: authentication_headers)
-      true
+      synchronize(:press_rf_bridge_button) do
+        button = find_rf_bridge_button!(uuid)
+        params = {
+          'appid' => APP_ID,
+          'deviceid' => button[:device_id],
+          'nonce' => nonce,
+          'params' => {
+            'cmd' => 'transmit',
+            'rfChl' => button[:channel],
+          },
+          'ts' => Time.now.to_i,
+          'version' => VERSION,
+        }
+        http_request(:post, '/api/user/device/status', body: JSON.generate(params), headers: authentication_headers)
+        true
+      end
     end
 
     def reload
@@ -48,33 +50,35 @@ module Ewelink
     end
 
     def rf_bridge_buttons
-      @rf_bridge_buttons ||= [].tap do |buttons|
-        rf_bridge_devices = devices.select { |device| device['uiid'] == RF_BRIDGE_DEVICE_UIID }.tap do |devices|
-          Ewelink.logger.debug(self.class.name) { "Found #{devices.size} RF 433MHz Bridge device(s)" }
-        end
-        rf_bridge_devices.each do |device|
-          device_id = device['deviceid'].presence || next
-          device_name = device['name'].presence || next
-          buttons = device['params']['rfList'].each do |rf|
-            button = {
-              channel: rf['rfChl'],
-              device_id: device_id,
-              device_name: device_name,
-            }
-            remote_info = device['tags']['zyx_info'].find { |info| info['buttonName'].find { |data| data.key?(button[:channel].to_s) } }.presence || next
-            remote_name = remote_info['name'].try(:squish).presence || next
-            button_info = remote_info['buttonName'].find { |info| info.key?(button[:channel].to_s) }.presence || next
-            button_name = button_info.values.first.try(:squish).presence || next
-            button.merge!({
-              name: button_name,
-              remote_name: remote_name,
-              remote_type: remote_info['remote_type'],
-            })
-            button[:uuid] = Digest::UUID.uuid_v5(UUID_NAMESPACE, "#{button[:device_id]}/#{button[:channel]}")
-            buttons << button
+      synchronize(:rf_bridge_buttons) do
+        @rf_bridge_buttons ||= [].tap do |buttons|
+          rf_bridge_devices = devices.select { |device| device['uiid'] == RF_BRIDGE_DEVICE_UIID }.tap do |devices|
+            Ewelink.logger.debug(self.class.name) { "Found #{devices.size} RF 433MHz bridge device(s)" }
           end
-        end
-      end.tap { |buttons| Ewelink.logger.debug(self.class.name) { "Found #{buttons.size} RF 433MHz bridge button(s)" } }
+          rf_bridge_devices.each do |device|
+            device_id = device['deviceid'].presence || next
+            device_name = device['name'].presence || next
+            buttons = device['params']['rfList'].each do |rf|
+              button = {
+                channel: rf['rfChl'],
+                device_id: device_id,
+                device_name: device_name,
+              }
+              remote_info = device['tags']['zyx_info'].find { |info| info['buttonName'].find { |data| data.key?(button[:channel].to_s) } }.presence || next
+              remote_name = remote_info['name'].try(:squish).presence || next
+              button_info = remote_info['buttonName'].find { |info| info.key?(button[:channel].to_s) }.presence || next
+              button_name = button_info.values.first.try(:squish).presence || next
+              button.merge!({
+                name: button_name,
+                remote_name: remote_name,
+                remote_type: remote_info['remote_type'],
+              })
+              button[:uuid] = Digest::UUID.uuid_v5(UUID_NAMESPACE, "#{button[:device_id]}/#{button[:channel]}")
+              buttons << button
+            end
+          end
+        end.tap { |buttons| Ewelink.logger.debug(self.class.name) { "Found #{buttons.size} RF 433MHz bridge button(s)" } }
+      end
     end
 
     def switch_on?(uuid)
@@ -91,19 +95,21 @@ module Ewelink
     end
 
     def switches
-      @switches ||= [].tap do |switches|
-        switch_devices = devices.select { |device| SWITCH_DEVICES_UIIDS.include?(device['uiid']) }
-        switch_devices.each do |device|
-          device_id = device['deviceid'].presence || next
-          name = device['name'].presence || next
-          switch = {
-            device_id: device_id,
-            name: name,
-          }
-          switch[:uuid] = Digest::UUID.uuid_v5(UUID_NAMESPACE, switch[:device_id])
-          switches << switch
-        end
-      end.tap { |switches| Ewelink.logger.debug(self.class.name) { "Found #{switches.size} switch(es)" } }
+      synchronize(:switches) do
+        @switches ||= [].tap do |switches|
+          switch_devices = devices.select { |device| SWITCH_DEVICES_UIIDS.include?(device['uiid']) }
+          switch_devices.each do |device|
+            device_id = device['deviceid'].presence || next
+            name = device['name'].presence || next
+            switch = {
+              device_id: device_id,
+              name: name,
+            }
+            switch[:uuid] = Digest::UUID.uuid_v5(UUID_NAMESPACE, switch[:device_id])
+            switches << switch
+          end
+        end.tap { |switches| Ewelink.logger.debug(self.class.name) { "Found #{switches.size} switch(es)" } }
+      end
     end
 
     def turn_switch!(uuid, on)
@@ -194,7 +200,7 @@ module Ewelink
       method = method.to_s.upcase
       headers = (options[:headers] || {}).reverse_merge('Content-Type' => 'application/json')
       Ewelink.logger.debug(self.class.name) { "#{method} #{url}" }
-      response = synchronize(:http_request) { HTTParty.send(method.downcase, url, options.merge(headers: headers).reverse_merge(timeout: TIMEOUT)) }
+      response = HTTParty.send(method.downcase, url, options.merge(headers: headers).reverse_merge(timeout: TIMEOUT))
       raise(Error.new("#{method} #{url}: #{response.code}")) unless response.success?
       if response['error'] == 301 && response['region'].present?
         @region = response['region']
