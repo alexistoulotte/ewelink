@@ -9,13 +9,14 @@ module Ewelink
       options[:turn_switches_on_uuids].each { |uuid| api.turn_switch!(uuid, :on) }
       options[:turn_switches_off_uuids].each { |uuid| api.turn_switch!(uuid, :off) }
       options[:press_rf_bridge_buttons_uuids].each { |uuid| api.press_rf_bridge_button!(uuid) }
+      puts(JSON.pretty_generate(options[:switch_status_uuids].map { |uuid| [uuid, api.switch_on?(uuid) ? 'on' : 'off'] }.to_h))
     end
 
     private
 
     def options
       @options ||= begin
-        options = { press_rf_bridge_buttons_uuids: [], turn_switches_off_uuids: [], turn_switches_on_uuids: [] }
+        options = { press_rf_bridge_buttons_uuids: [], turn_switches_off_uuids: [], turn_switches_on_uuids: [], switch_status_uuids: [] }
         parser = OptionParser.new do |opts|
           opts.banner = 'Manage eWeLink smart home devices'
           opts.version = File.read(File.expand_path('../../VERSION', __dir__)).strip
@@ -46,6 +47,9 @@ module Ewelink
           opts.on('--press-rf-bridge-button BUTTON_UUID', 'Press RF 433MHz bridge button with specified UUID') do |uuid|
             options[:press_rf_bridge_buttons_uuids] << uuid
           end
+          opts.on('--switch-status SWITCH_UUID', 'Displays switch status of specified UUID') do |uuid|
+            options[:switch_status_uuids] << uuid
+          end
           opts.on('-v', '--verbose', 'Verbose mode') do
             Ewelink.logger.level = :debug
           end
@@ -61,7 +65,7 @@ module Ewelink
           STDERR.puts(parser.summarize)
           exit(1)
         end
-        if [:list_switches, :list_rf_bridge_buttons, :turn_switches_on_uuids, :turn_switches_off_uuids, :press_rf_bridge_buttons_uuids].map { |action| options[action] }.all?(&:blank?)
+        if [:list_switches, :list_rf_bridge_buttons, :turn_switches_on_uuids, :turn_switches_off_uuids, :press_rf_bridge_buttons_uuids, :switch_status_uuids].map { |action| options[action] }.all?(&:blank?)
           STDERR.puts('An action must be specified (listing switches, press RF bridge button, etc.)')
           STDERR.puts(parser.summarize)
           exit(1)

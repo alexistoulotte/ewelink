@@ -36,7 +36,7 @@ module Ewelink
           'ts' => Time.now.to_i,
           'version' => VERSION,
         }
-        http_request(:post, '/api/user/device/status', body: JSON.generate(params), headers: authentication_headers)
+        rest_request(:post, '/api/user/device/status', body: JSON.generate(params), headers: authentication_headers)
         true
       end
     end
@@ -90,7 +90,7 @@ module Ewelink
         'ts' => Time.now.to_i,
         'version' => VERSION,
       }
-      response = http_request(:get, '/api/user/device/status', headers: authentication_headers, query: params)
+      response = rest_request(:get, '/api/user/device/status', headers: authentication_headers, query: params)
       response['params']['switch'] == 'on'
     end
 
@@ -129,7 +129,7 @@ module Ewelink
         'ts' => Time.now.to_i,
         'version' => VERSION,
       }
-      http_request(:post, '/api/user/device/status', body: JSON.generate(params), headers: authentication_headers)
+      rest_request(:post, '/api/user/device/status', body: JSON.generate(params), headers: authentication_headers)
       true
     end
 
@@ -156,7 +156,7 @@ module Ewelink
             params['phoneNumber'] = phone_number
           end
           body = JSON.generate(params)
-          response = http_request(:post, '/api/user/login', { body: body, headers: { 'Authorization' => "Sign #{Base64.encode64(OpenSSL::HMAC.digest('SHA256', APP_SECRET, body))}" } })
+          response = rest_request(:post, '/api/user/login', { body: body, headers: { 'Authorization' => "Sign #{Base64.encode64(OpenSSL::HMAC.digest('SHA256', APP_SECRET, body))}" } })
           raise(Error.new('Authentication token not found')) if response['at'].blank?
           response['at'].tap { Ewelink.logger.debug(self.class.name) { 'Authentication token found' } }
         end
@@ -173,7 +173,7 @@ module Ewelink
             'ts' => Time.now.to_i,
             'version' => VERSION,
           }
-          response = http_request(:get, '/api/user/device', headers: authentication_headers, query: params)
+          response = rest_request(:get, '/api/user/device', headers: authentication_headers, query: params)
           response['devicelist'].tap { |devices| Ewelink.logger.debug(self.class.name) { "Found #{devices.size} device(s)" } }
         end
       end
@@ -195,7 +195,7 @@ module Ewelink
       @region ||= DEFAULT_REGION
     end
 
-    def http_request(method, path, options = {})
+    def rest_request(method, path, options = {})
       url = "#{URL.gsub('#{region}', region)}#{path}"
       method = method.to_s.upcase
       headers = (options[:headers] || {}).reverse_merge('Content-Type' => 'application/json')
@@ -205,7 +205,7 @@ module Ewelink
       if response['error'] == 301 && response['region'].present?
         @region = response['region']
         Ewelink.logger.debug(self.class.name) { "Switched to region #{region.inspect}" }
-        return http_request(method, path, options)
+        return rest_request(method, path, options)
       end
       remove_instance_variable(:@authentication_token) if instance_variable_defined?(:@authentication_token) && [401, 403].include?(response['error'])
       raise(Error.new("#{method} #{url}: #{response['error']} #{response['msg']}".strip)) if response['error'].present? && response['error'] != 0
