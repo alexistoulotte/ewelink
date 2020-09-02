@@ -11,6 +11,7 @@ module Ewelink
     URL = 'https://#{region}-api.coolkit.cc:8080'
     UUID_NAMESPACE = 'e25750fb-3710-41af-b831-23224f4dd609';
     VERSION = 8
+    WEB_SOCKET_PING_TOLERANCE_FACTOR = 1.5
     WEB_SOCKET_WAIT_INTERVAL = 0.2.seconds
 
     attr_reader :email, :password, :phone_number
@@ -41,6 +42,7 @@ module Ewelink
             'ts' => 0,
             'userAgent' => 'app',
           }
+          Ewelink.logger.debug(self.class.name) { "Pressing RF bridge button #{button[:uuid].inspect}" }
           send_to_web_socket(JSON.generate(params))
           true
         end
@@ -48,10 +50,17 @@ module Ewelink
     end
 
     def reload
-      Ewelink.logger.debug(self.class.name) { 'Reloading API (authentication token, devices, region,...)' }
+      Ewelink.logger.debug(self.class.name) { 'Reloading API (authentication token, devices, region, connections,...)' }
       dispose_web_socket
       @switches_statuses.clear
-      [:@api_keys, :@authentication_token, :@devices, :@rf_bridge_buttons, :@region, :@switches, :@web_socket, :@web_socket_url].each do |variable|
+      [
+        :@api_keys,
+        :@authentication_token,
+        :@devices,
+        :@region,
+        :@rf_bridge_buttons,
+        :@switches,
+      ].each do |variable|
         remove_instance_variable(variable) if instance_variable_defined?(variable)
       end
       self
@@ -103,10 +112,12 @@ module Ewelink
           'userAgent' => 'app',
         }
         web_socket_wait_for(-> { web_socket_authenticated? }) do
+          Ewelink.logger.debug(self.class.name) { "Checking switch #{switch[:uuid].inspect} status" }
           send_to_web_socket(JSON.generate(params))
         end
       end
       web_socket_wait_for(-> { !@switches_statuses[switch[:uuid]].nil? }) do
+        Ewelink.logger.debug(self.class.name) { "Switch #{switch[:uuid].inspect} is #{@switches_statuses[switch[:uuid]]}" }
         @switches_statuses[switch[:uuid]] == 'on'
       end
     end
@@ -151,9 +162,11 @@ module Ewelink
           'ts' => 0,
           'userAgent' => 'app',
         }
+        Ewelink.logger.debug(self.class.name) { "Turning switch #{switch[:uuid].inspect} #{on ? 'on' : 'off'}" }
         send_to_web_socket(JSON.generate(params))
-        true
       end
+      switch_on?(switch[:uuid]) # Waiting for switch status update
+      true
     end
 
     private
@@ -210,13 +223,31 @@ module Ewelink
 
     def dispose_web_socket
       @web_socket_authenticated_api_keys = Set.new
-      if instance_variable_defined?(:@web_socket)
+
+      if @web_socket_ping_thread
+        if Thread.current == @web_socket_ping_thread
+          Thread.current[:stop] = true
+        else
+          @web_socket_ping_thread.kill
+        end
+      end
+
+      if @web_socket.present?
         begin
           @web_socket.close if @web_socket.open?
         rescue
           # Ignoring close errors
         end
-        remove_instance_variable(:@web_socket) if instance_variable_defined?(:@web_socket)
+      end
+
+      [
+        :@last_web_socket_pong_at,
+        :@web_socket_ping_interval,
+        :@web_socket_ping_thread,
+        :@web_socket_url,
+        :@web_socket,
+      ].each do |variable|
+        remove_instance_variable(variable) if instance_variable_defined?(variable)
       end
     end
 
@@ -256,6 +287,10 @@ module Ewelink
     end
 
     def send_to_web_socket(data)
+      if web_socket_outdated_ping?
+        Ewelink.logger.warn(self.class.name) { 'WebSocket ping is outdated' }
+        dispose_web_socket
+      end
       web_socket.send(data)
     rescue
       dispose_web_socket
@@ -290,16 +325,42 @@ module Ewelink
 
             web_socket.on(:message) do |message|
               api.instance_eval do
-                response = JSON.parse(message.data)
+                if message.data == 'pong'
+                  Ewelink.logger.debug(self.class.name) { "Received WebSocket #{message.data.inspect} message" }
+                  @last_web_socket_pong_at = Time.now
+                  next
+                end
+
+                begin
+                  response = JSON.parse(message.data)
+                rescue => e
+                  Ewelink.logger.error(self.class.name) { "WebSocket JSON parse error" }
+                  next
+                end
 
                 if response.key?('error') && response['error'] != 0
                   Ewelink.logger.error(self.class.name) { "WebSocket message error: #{message.data}" }
                   next
                 end
 
+                if !@web_socket_ping_thread && response.key?('config') && response['config'].key?('hbInterval')
+                  @last_web_socket_pong_at = Time.now
+                  # @web_socket_ping_interval = response['config']['hbInterval']
+                  @web_socket_ping_interval = 30.seconds
+                  Ewelink.logger.debug(self.class.name) { "Creating thread for WebSocket ping every #{@web_socket_ping_interval} seconds" }
+                  @web_socket_ping_thread = Thread.new do
+                    loop do
+                      break if Thread.current[:stop]
+                      sleep(@web_socket_ping_interval)
+                      Ewelink.logger.debug(self.class.name) { 'Sending WebSocket ping' }
+                      send_to_web_socket('ping')
+                    end
+                  end
+                end
+
                 if response['apikey'].present? && !@web_socket_authenticated_api_keys.include?(response['apikey'])
                   @web_socket_authenticated_api_keys << response['apikey']
-                  Ewelink.logger.debug(self.class.name) { "WebSocket successfully authenticated API key: #{response['apikey'].inspect}" }
+                  Ewelink.logger.debug(self.class.name) { "WebSocket successfully authenticated API key: #{response['apikey'].truncate(16).inspect}" }
                 end
 
                 if response['deviceid'].present? && response['params'].is_a?(Hash) && response['params']['switch'].present?
@@ -324,7 +385,7 @@ module Ewelink
                     'userAgent' => 'app',
                     'version' => VERSION,
                   }
-                  Ewelink.logger.debug(self.class.name) { "Authenticating WebSocket API key: #{api_key.inspect}" }
+                  Ewelink.logger.debug(self.class.name) { "Authenticating WebSocket API key: #{api_key.truncate(16).inspect}" }
                   send_to_web_socket(JSON.generate(params))
                 end
               end
@@ -336,6 +397,10 @@ module Ewelink
 
     def web_socket_authenticated?
       api_keys == @web_socket_authenticated_api_keys
+    end
+
+    def web_socket_outdated_ping?
+      @last_web_socket_pong_at.present? && @web_socket_ping_interval.present? && @last_web_socket_pong_at < (@web_socket_ping_interval * WEB_SOCKET_PING_TOLERANCE_FACTOR).seconds.ago
     end
 
     def web_socket_sequence
@@ -365,7 +430,10 @@ module Ewelink
       web_socket # Initializes WebSocket
       Timeout.timeout(TIMEOUT) do
         loop do
-          return yield if condition.call
+          if condition.call
+            return yield if block_given?
+            return true
+          end
           sleep(WEB_SOCKET_WAIT_INTERVAL)
         end
       end
