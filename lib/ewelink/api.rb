@@ -5,9 +5,9 @@ module Ewelink
     APP_ID = 'oeVkj2lYFGnJu5XUtWisfW4utiN4u9Mq'
     APP_SECRET = '6Nz4n0xA8s8qdxQf2GqurZj2Fs55FUvM'
     DEFAULT_REGION = 'us'
+    REQUEST_TIMEOUT = 10.seconds
     RF_BRIDGE_DEVICE_UIID = 28
     SWITCH_DEVICES_UIIDS = [1, 5, 6, 24]
-    TIMEOUT = 10.seconds
     URL = 'https://#{region}-api.coolkit.cc:8080'
     UUID_NAMESPACE = 'e25750fb-3710-41af-b831-23224f4dd609';
     VERSION = 8
@@ -21,8 +21,8 @@ module Ewelink
       @mutexs = {}
       @password = password.presence || raise(Error.new(":password must be specified"))
       @phone_number = phone_number.presence.try(:strip)
-      @switches_statuses = {}
       @web_socket_authenticated_api_keys = Set.new
+      @web_socket_switches_statuses = {}
       raise(Error.new(":email or :phone_number must be specified")) if email.blank? && phone_number.blank?
     end
 
@@ -52,7 +52,6 @@ module Ewelink
     def reload
       Ewelink.logger.debug(self.class.name) { 'Reloading API (authentication token, devices, region, connections,...)' }
       dispose_web_socket
-      @switches_statuses.clear
       [
         :@api_keys,
         :@authentication_token,
@@ -102,7 +101,7 @@ module Ewelink
 
     def switch_on?(uuid)
       switch = find_switch!(uuid)
-      if @switches_statuses[switch[:uuid]].nil?
+      if @web_socket_switches_statuses[switch[:uuid]].nil?
         params = {
           'action' => 'query',
           'apikey' => switch[:api_key],
@@ -116,9 +115,9 @@ module Ewelink
           send_to_web_socket(JSON.generate(params))
         end
       end
-      web_socket_wait_for(-> { !@switches_statuses[switch[:uuid]].nil? }) do
-        Ewelink.logger.debug(self.class.name) { "Switch #{switch[:uuid].inspect} is #{@switches_statuses[switch[:uuid]]}" }
-        @switches_statuses[switch[:uuid]] == 'on'
+      web_socket_wait_for(-> { !@web_socket_switches_statuses[switch[:uuid]].nil? }) do
+        Ewelink.logger.debug(self.class.name) { "Switch #{switch[:uuid].inspect} is #{@web_socket_switches_statuses[switch[:uuid]]}" }
+        @web_socket_switches_statuses[switch[:uuid]] == 'on'
       end
     end
 
@@ -149,7 +148,7 @@ module Ewelink
         on = false
       end
       switch = find_switch!(uuid)
-      @switches_statuses[switch[:uuid]] = nil
+      @web_socket_switches_statuses[switch[:uuid]] = nil
       web_socket_wait_for(-> { web_socket_authenticated? }) do
         params = {
           'action' => 'update',
@@ -222,7 +221,8 @@ module Ewelink
     end
 
     def dispose_web_socket
-      @web_socket_authenticated_api_keys = Set.new
+      @web_socket_authenticated_api_keys.clear
+      @web_socket_switches_statuses.clear
 
       if @web_socket_ping_thread
         if Thread.current == @web_socket_ping_thread
@@ -272,7 +272,7 @@ module Ewelink
       method = method.to_s.upcase
       headers = (options[:headers] || {}).reverse_merge('Content-Type' => 'application/json')
       Ewelink.logger.debug(self.class.name) { "#{method} #{url}" }
-      response = HTTParty.send(method.downcase, url, options.merge(headers: headers).reverse_merge(timeout: TIMEOUT))
+      response = HTTParty.send(method.downcase, url, options.merge(headers: headers).reverse_merge(timeout: REQUEST_TIMEOUT))
       raise(Error.new("#{method} #{url}: #{response.code}")) unless response.success?
       if response['error'] == 301 && response['region'].present?
         @region = response['region']
@@ -307,7 +307,7 @@ module Ewelink
           api = self
 
           WebSocket::Client::Simple.connect(web_socket_url) do |web_socket|
-            Ewelink.logger.debug(self.class.name) { "Opening WebSocket to #{web_socket_url}" }
+            Ewelink.logger.debug(self.class.name) { "Opening WebSocket to #{web_socket_url.inspect}" }
 
             web_socket.on(:close) do
               api.instance_eval do
@@ -343,10 +343,9 @@ module Ewelink
                   next
                 end
 
-                if !@web_socket_ping_thread && response.key?('config') && response['config'].key?('hbInterval')
+                if !@web_socket_ping_thread && response.key?('config') && response['config']['hb'] == 1 && response['config']['hbInterval'].present?
                   @last_web_socket_pong_at = Time.now
-                  # @web_socket_ping_interval = response['config']['hbInterval']
-                  @web_socket_ping_interval = 30.seconds
+                  @web_socket_ping_interval = response['config']['hbInterval'] + 7
                   Ewelink.logger.debug(self.class.name) { "Creating thread for WebSocket ping every #{@web_socket_ping_interval} seconds" }
                   @web_socket_ping_thread = Thread.new do
                     loop do
@@ -365,7 +364,7 @@ module Ewelink
 
                 if response['deviceid'].present? && response['params'].is_a?(Hash) && response['params']['switch'].present?
                   switch = switches.find { |switch| switch[:device_id] == response['deviceid'] }
-                  @switches_statuses[switch[:uuid]] = response['params']['switch'] if switch.present?
+                  @web_socket_switches_statuses[switch[:uuid]] = response['params']['switch'] if switch.present?
                 end
               end
             end
@@ -428,7 +427,7 @@ module Ewelink
 
     def web_socket_wait_for(condition, &block)
       web_socket # Initializes WebSocket
-      Timeout.timeout(TIMEOUT) do
+      Timeout.timeout(REQUEST_TIMEOUT) do
         loop do
           if condition.call
             return yield if block_given?
