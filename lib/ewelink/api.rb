@@ -7,10 +7,11 @@ module Ewelink
     DEFAULT_REGION = 'us'
     RF_BRIDGE_DEVICE_UIID = 28
     SWITCH_DEVICES_UIIDS = [1, 5, 6, 24]
-    TIMEOUT = 10
+    TIMEOUT = 10.seconds
     URL = 'https://#{region}-api.coolkit.cc:8080'
     UUID_NAMESPACE = 'e25750fb-3710-41af-b831-23224f4dd609';
     VERSION = 8
+    WEB_SOCKET_WAIT_INTERVAL = 0.2.seconds
 
     attr_reader :email, :password, :phone_number
 
@@ -19,31 +20,38 @@ module Ewelink
       @mutexs = {}
       @password = password.presence || raise(Error.new(":password must be specified"))
       @phone_number = phone_number.presence.try(:strip)
+      @switches_statuses = {}
+      @web_socket_authenticated_api_keys = Set.new
       raise(Error.new(":email or :phone_number must be specified")) if email.blank? && phone_number.blank?
     end
 
     def press_rf_bridge_button!(uuid)
       synchronize(:press_rf_bridge_button) do
         button = find_rf_bridge_button!(uuid)
-        params = {
-          'appid' => APP_ID,
-          'deviceid' => button[:device_id],
-          'nonce' => nonce,
-          'params' => {
-            'cmd' => 'transmit',
-            'rfChl' => button[:channel],
-          },
-          'ts' => Time.now.to_i,
-          'version' => VERSION,
-        }
-        rest_request(:post, '/api/user/device/status', body: JSON.generate(params), headers: authentication_headers)
-        true
+        web_socket_wait_for(-> { web_socket_authenticated? }) do
+          params = {
+            'action' => 'update',
+            'apikey' => button[:api_key],
+            'deviceid' => button[:device_id],
+            'params' => {
+              'cmd' => 'transmit',
+              'rfChl' => button[:channel],
+            },
+            'sequence' => web_socket_sequence,
+            'ts' => 0,
+            'userAgent' => 'app',
+          }
+          send_to_web_socket(JSON.generate(params))
+          true
+        end
       end
     end
 
     def reload
-      Ewelink.logger.debug(self.class.name) { 'Reloading API (authentication token, devices & region cache)' }
-      [:@authentication_token, :@devices, :@rf_bridge_buttons, :@region, :@switches].each do |variable|
+      Ewelink.logger.debug(self.class.name) { 'Reloading API (authentication token, devices, region,...)' }
+      dispose_web_socket
+      @switches_statuses.clear
+      [:@api_keys, :@authentication_token, :@devices, :@rf_bridge_buttons, :@region, :@switches, :@web_socket, :@web_socket_url].each do |variable|
         remove_instance_variable(variable) if instance_variable_defined?(variable)
       end
       self
@@ -56,10 +64,12 @@ module Ewelink
             Ewelink.logger.debug(self.class.name) { "Found #{devices.size} RF 433MHz bridge device(s)" }
           end
           rf_bridge_devices.each do |device|
+            api_key = device['apikey'].presence || next
             device_id = device['deviceid'].presence || next
             device_name = device['name'].presence || next
             buttons = device['params']['rfList'].each do |rf|
               button = {
+                api_key: api_key,
                 channel: rf['rfChl'],
                 device_id: device_id,
                 device_name: device_name,
@@ -83,15 +93,22 @@ module Ewelink
 
     def switch_on?(uuid)
       switch = find_switch!(uuid)
-      params = {
-        'appid' => APP_ID,
-        'deviceid' => switch[:device_id],
-        'nonce' => nonce,
-        'ts' => Time.now.to_i,
-        'version' => VERSION,
-      }
-      response = rest_request(:get, '/api/user/device/status', headers: authentication_headers, query: params)
-      response['params']['switch'] == 'on'
+      if @switches_statuses[switch[:uuid]].nil?
+        params = {
+          'action' => 'query',
+          'apikey' => switch[:api_key],
+          'deviceid' => switch[:device_id],
+          'sequence' => web_socket_sequence,
+          'ts' => 0,
+          'userAgent' => 'app',
+        }
+        web_socket_wait_for(-> { web_socket_authenticated? }) do
+          send_to_web_socket(JSON.generate(params))
+        end
+      end
+      web_socket_wait_for(-> { !@switches_statuses[switch[:uuid]].nil? }) do
+        @switches_statuses[switch[:uuid]] == 'on'
+      end
     end
 
     def switches
@@ -99,9 +116,11 @@ module Ewelink
         @switches ||= [].tap do |switches|
           switch_devices = devices.select { |device| SWITCH_DEVICES_UIIDS.include?(device['uiid']) }
           switch_devices.each do |device|
+            api_key = device['apikey'].presence || next
             device_id = device['deviceid'].presence || next
             name = device['name'].presence || next
             switch = {
+              api_key: api_key,
               device_id: device_id,
               name: name,
             }
@@ -119,21 +138,31 @@ module Ewelink
         on = false
       end
       switch = find_switch!(uuid)
-      params = {
-        'appid' => APP_ID,
-        'deviceid' => switch[:device_id],
-        'nonce' => nonce,
-        'params' => {
-          'switch' => on ? 'on' : 'off',
-        },
-        'ts' => Time.now.to_i,
-        'version' => VERSION,
-      }
-      rest_request(:post, '/api/user/device/status', body: JSON.generate(params), headers: authentication_headers)
-      true
+      @switches_statuses[switch[:uuid]] = nil
+      web_socket_wait_for(-> { web_socket_authenticated? }) do
+        params = {
+          'action' => 'update',
+          'apikey' => switch[:api_key],
+          'deviceid' => switch[:device_id],
+          'params' => {
+            'switch' => on ? 'on' : 'off',
+          },
+          'sequence' => web_socket_sequence,
+          'ts' => 0,
+          'userAgent' => 'app',
+        }
+        send_to_web_socket(JSON.generate(params))
+        true
+      end
     end
 
     private
+
+    def api_keys
+      synchronize(:api_keys) do
+        @api_keys ||= Set.new(devices.map { |device| device['apikey'] })
+      end
+    end
 
     def authentication_headers
       { 'Authorization' => "Bearer #{authentication_token}" }
@@ -179,6 +208,18 @@ module Ewelink
       end
     end
 
+    def dispose_web_socket
+      @web_socket_authenticated_api_keys = Set.new
+      if instance_variable_defined?(:@web_socket)
+        begin
+          @web_socket.close if @web_socket.open?
+        rescue
+          # Ignoring close errors
+        end
+        remove_instance_variable(:@web_socket) if instance_variable_defined?(:@web_socket)
+      end
+    end
+
     def find_rf_bridge_button!(uuid)
       rf_bridge_buttons.find { |button| button[:uuid] == uuid } || raise(Error.new("No such RF bridge button with UUID: #{uuid.inspect}"))
     end
@@ -209,13 +250,125 @@ module Ewelink
       end
       remove_instance_variable(:@authentication_token) if instance_variable_defined?(:@authentication_token) && [401, 403].include?(response['error'])
       raise(Error.new("#{method} #{url}: #{response['error']} #{response['msg']}".strip)) if response['error'].present? && response['error'] != 0
-      response
+      response.to_h
     rescue Errno::ECONNREFUSED, OpenSSL::OpenSSLError, SocketError, Timeout::Error => e
       raise Error.new(e)
     end
 
+    def send_to_web_socket(data)
+      web_socket.send(data)
+    rescue
+      dispose_web_socket
+      raise
+    end
+
     def synchronize(name, &block)
       (@mutexs[name] ||= Mutex.new).synchronize(&block)
+    end
+
+    def web_socket
+      synchronize(:web_socket) do
+        @web_socket ||= begin
+          api = self
+
+          WebSocket::Client::Simple.connect(web_socket_url) do |web_socket|
+            Ewelink.logger.debug(self.class.name) { "Opening WebSocket to #{web_socket_url}" }
+
+            web_socket.on(:close) do
+              api.instance_eval do
+                Ewelink.logger.debug(self.class.name) { 'WebSocket closed' }
+                dispose_web_socket
+              end
+            end
+
+            web_socket.on(:error) do |e|
+              api.instance_eval do
+                Ewelink.logger.warn(self.class.name) { "WebSocket error: #{e}" }
+                dispose_web_socket
+              end
+            end
+
+            web_socket.on(:message) do |message|
+              api.instance_eval do
+                response = JSON.parse(message.data)
+
+                if response.key?('error') && response['error'] != 0
+                  Ewelink.logger.error(self.class.name) { "WebSocket message error: #{message.data}" }
+                  next
+                end
+
+                if response['apikey'].present? && !@web_socket_authenticated_api_keys.include?(response['apikey'])
+                  @web_socket_authenticated_api_keys << response['apikey']
+                  Ewelink.logger.debug(self.class.name) { "WebSocket successfully authenticated API key: #{response['apikey'].inspect}" }
+                end
+
+                if response['deviceid'].present? && response['params'].is_a?(Hash) && response['params']['switch'].present?
+                  switch = switches.find { |switch| switch[:device_id] == response['deviceid'] }
+                  @switches_statuses[switch[:uuid]] = response['params']['switch'] if switch.present?
+                end
+              end
+            end
+
+            web_socket.on(:open) do
+              api.instance_eval do
+                Ewelink.logger.debug(self.class.name) { 'WebSocket opened' }
+                api_keys.each do |api_key|
+                  params = {
+                    'action' => 'userOnline',
+                    'apikey' => api_key,
+                    'appid' => APP_ID,
+                    'at' => authentication_token,
+                    'nonce' => nonce,
+                    'sequence' => web_socket_sequence,
+                    'ts' => Time.now.to_i,
+                    'userAgent' => 'app',
+                    'version' => VERSION,
+                  }
+                  Ewelink.logger.debug(self.class.name) { "Authenticating WebSocket API key: #{api_key.inspect}" }
+                  send_to_web_socket(JSON.generate(params))
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+
+    def web_socket_authenticated?
+      api_keys == @web_socket_authenticated_api_keys
+    end
+
+    def web_socket_sequence
+      (Time.now.to_f * 1000).round.to_s
+    end
+
+    def web_socket_url
+      synchronize(:web_socket_url) do
+        @web_socket_url ||= begin
+          params = {
+            'accept' => 'ws',
+            'appid' => APP_ID,
+            'nonce' => nonce,
+            'ts' => Time.now.to_i,
+            'version' => VERSION,
+          }
+          response = rest_request(:post, '/dispatch/app', body: JSON.generate(params), headers: authentication_headers)
+          raise('Error while getting WebSocket URL') unless response['error'] == 0
+          domain = response['domain'].presence || raise("Can't get WebSocket server domain")
+          port = response['port'].presence || raise("Can't get WebSocket server port")
+          "wss://#{domain}:#{port}/api/ws".tap { |url| Ewelink.logger.debug(self.class.name) { "WebSocket URL is: #{url.inspect}" } }
+        end
+      end
+    end
+
+    def web_socket_wait_for(condition, &block)
+      web_socket # Initializes WebSocket
+      Timeout.timeout(TIMEOUT) do
+        loop do
+          return yield if condition.call
+          sleep(WEB_SOCKET_WAIT_INTERVAL)
+        end
+      end
     end
 
   end

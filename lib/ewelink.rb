@@ -7,6 +7,9 @@ require 'json'
 require 'logger'
 require 'openssl'
 require 'optparse'
+require 'set'
+require 'timeout'
+require 'websocket-client-simple'
 
 module Ewelink
 
