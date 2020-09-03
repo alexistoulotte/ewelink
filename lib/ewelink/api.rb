@@ -12,6 +12,7 @@ module Ewelink
     UUID_NAMESPACE = 'e25750fb-3710-41af-b831-23224f4dd609';
     VERSION = 8
     WEB_SOCKET_PING_TOLERANCE_FACTOR = 1.5
+    SWITCH_STATUS_CHANGE_CHECK_TIMEOUT = 2.seconds
     WEB_SOCKET_WAIT_INTERVAL = 0.2.seconds
 
     attr_reader :email, :password, :phone_number
@@ -163,6 +164,7 @@ module Ewelink
         Ewelink.logger.debug(self.class.name) { "Turning switch #{switch[:uuid].inspect} #{on ? 'on' : 'off'}" }
         send_to_web_socket(JSON.generate(params))
       end
+      sleep(SWITCH_STATUS_CHANGE_CHECK_TIMEOUT)
       switch_on?(switch[:uuid]) # Waiting for switch status update
       true
     end
@@ -445,6 +447,8 @@ module Ewelink
           sleep(WEB_SOCKET_WAIT_INTERVAL)
         end
         block_given? ? yield : true
+      rescue
+        dispose_web_socket
       end
     end
 
