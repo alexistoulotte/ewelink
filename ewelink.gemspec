@@ -16,8 +16,8 @@ Gem::Specification.new do |s|
   s.required_ruby_version = '>= 2.0.0'
 
   s.add_dependency 'activesupport', '>= 6.0.0', '< 7.0.0'
+  s.add_dependency 'faye-websocket', '>= 0.11.0', '< 0.12.0'
   s.add_dependency 'httparty', '>= 0.18.0', '< 0.19.0'
-  s.add_dependency 'websocket-client-simple', '>= 0.3.0', '< 0.4.0'
 
   s.add_development_dependency 'byebug', '>= 11.0.0', '< 12.0.0'
   s.add_development_dependency 'rake', '>= 12.0.0', '< 13.0.0'
