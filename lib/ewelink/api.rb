@@ -30,7 +30,7 @@ module Ewelink
     def press_rf_bridge_button!(uuid)
       synchronize(:press_rf_bridge_button) do
         button = find_rf_bridge_button!(uuid)
-        web_socket_wait_for(-> { web_socket_authenticated? }) do
+        web_socket_wait_for(-> { web_socket_authenticated? }, initialize_web_socket: true) do
           params = {
             'action' => 'update',
             'apikey' => button[:api_key],
@@ -51,15 +51,41 @@ module Ewelink
     end
 
     def reload
-      Ewelink.logger.debug(self.class.name) { 'Reloading API (authentication token, devices, region,...)' }
-      dispose_web_socket
+      Ewelink.logger.debug(self.class.name) { 'Reloading API (authentication token, devices, region, connections,...)' }
+
+      @web_socket_authenticated_api_keys.clear
+      @web_socket_switches_statuses.clear
+
+      [@web_socket_ping_thread, @web_socket_thread].each do |thread|
+        next unless thread
+        if Thread.current == thread
+          thread[:stop] = true
+        else
+          thread.kill
+        end
+      end
+
+      if @web_socket.present?
+        begin
+          @web_socket.close if @web_socket.open?
+        rescue
+          # Ignoring close errors
+        end
+      end
+
       [
         :@api_keys,
         :@authentication_token,
         :@devices,
+        :@last_web_socket_pong_at,
         :@region,
         :@rf_bridge_buttons,
         :@switches,
+        :@web_socket_ping_interval,
+        :@web_socket_ping_thread,
+        :@web_socket_thread,
+        :@web_socket_url,
+        :@web_socket,
       ].each do |variable|
         remove_instance_variable(variable) if instance_variable_defined?(variable)
       end
@@ -103,7 +129,7 @@ module Ewelink
     def switch_on?(uuid)
       switch = find_switch!(uuid)
       if @web_socket_switches_statuses[switch[:uuid]].nil?
-        web_socket_wait_for(-> { web_socket_authenticated? }) do
+        web_socket_wait_for(-> { web_socket_authenticated? }, initialize_web_socket: true) do
           Ewelink.logger.debug(self.class.name) { "Checking switch #{switch[:uuid].inspect} status" }
           params = {
             'action' => 'query',
@@ -116,7 +142,7 @@ module Ewelink
           send_to_web_socket(JSON.generate(params))
         end
       end
-      web_socket_wait_for(-> { !@web_socket_switches_statuses[switch[:uuid]].nil? }) do
+      web_socket_wait_for(-> { !@web_socket_switches_statuses[switch[:uuid]].nil? }, initialize_web_socket: true) do
         @web_socket_switches_statuses[switch[:uuid]] == 'on'
       end
     end
@@ -149,7 +175,7 @@ module Ewelink
       end
       switch = find_switch!(uuid)
       @web_socket_switches_statuses[switch[:uuid]] = nil
-      web_socket_wait_for(-> { web_socket_authenticated? }) do
+      web_socket_wait_for(-> { web_socket_authenticated? }, initialize_web_socket: true) do
         params = {
           'action' => 'update',
           'apikey' => switch[:api_key],
@@ -239,40 +265,6 @@ module Ewelink
       end
     end
 
-    def dispose_web_socket
-      Ewelink.logger.debug(self.class.name) { 'Dispose WebSocket' }
-      @web_socket_authenticated_api_keys.clear
-      @web_socket_switches_statuses.clear
-
-      [@web_socket_ping_thread, @web_socket_thread].each do |thread|
-        next unless thread
-        if Thread.current == thread
-          thread[:stop] = true
-        else
-          thread.kill
-        end
-      end
-
-      if @web_socket.present?
-        begin
-          @web_socket.close if @web_socket.open?
-        rescue
-          # Ignoring close errors
-        end
-      end
-
-      [
-        :@last_web_socket_pong_at,
-        :@web_socket_ping_interval,
-        :@web_socket_ping_thread,
-        :@web_socket_thread,
-        :@web_socket_url,
-        :@web_socket,
-      ].each do |variable|
-        remove_instance_variable(variable) if instance_variable_defined?(variable)
-      end
-    end
-
     def find_rf_bridge_button!(uuid)
       rf_bridge_buttons.find { |button| button[:uuid] == uuid } || raise(Error.new("No such RF bridge button with UUID: #{uuid.inspect}"))
     end
@@ -311,11 +303,11 @@ module Ewelink
     def send_to_web_socket(message)
       if web_socket_outdated_ping?
         Ewelink.logger.warn(self.class.name) { 'WebSocket ping is outdated' }
-        dispose_web_socket
+        reload
       end
       web_socket.send(message)
     rescue => e
-      dispose_web_socket
+      reload
       raise Error.new(e)
     end
 
@@ -349,7 +341,7 @@ module Ewelink
 
             @web_socket.on(:close) do |event|
               Ewelink.logger.debug(self.class.name) { 'WebSocket closed' }
-              dispose_web_socket
+              reload
             end
 
             @web_socket.on(:open) do |event|
@@ -371,11 +363,13 @@ module Ewelink
                 json = JSON.parse(message)
               rescue => e
                 Ewelink.logger.error(self.class.name) { 'WebSocket JSON parse error' }
+                reload
                 next
               end
 
               if json.key?('error') && json['error'] != 0
                 Ewelink.logger.error(self.class.name) { "WebSocket message error: #{message.inspect}" }
+                reload
                 next
               end
 
@@ -399,13 +393,9 @@ module Ewelink
           end
         end
 
-        Timeout.timeout(REQUEST_TIMEOUT) do
-          while @web_socket.blank?
-            sleep(WEB_SOCKET_WAIT_INTERVAL)
-          end
+        web_socket_wait_for(-> { @web_socket.present? }) do
+          @web_socket
         end
-
-        @web_socket
       end
     end
 
@@ -440,15 +430,18 @@ module Ewelink
       end
     end
 
-    def web_socket_wait_for(condition, &block)
-      web_socket # Initializes WebSocket
-      Timeout.timeout(REQUEST_TIMEOUT) do
-        while !condition.call
-          sleep(WEB_SOCKET_WAIT_INTERVAL)
+    def web_socket_wait_for(condition, initialize_web_socket: false, &block)
+      web_socket if initialize_web_socket
+      begin
+        Timeout.timeout(REQUEST_TIMEOUT) do
+          while !condition.call
+            sleep(WEB_SOCKET_WAIT_INTERVAL)
+          end
+          block_given? ? yield : true
         end
-        block_given? ? yield : true
-      rescue
-        dispose_web_socket
+      rescue => e
+        reload
+        raise Error.new(e)
       end
     end
 
