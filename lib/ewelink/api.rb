@@ -11,6 +11,7 @@ module Ewelink
     URL = 'https://#{region}-api.coolkit.cc:8080'
     UUID_NAMESPACE = 'e25750fb-3710-41af-b831-23224f4dd609';
     VERSION = 8
+    WEB_SOCKET_CHECK_AUTHENTICATION_TIMEOUT = 30.seconds
     WEB_SOCKET_PING_TOLERANCE_FACTOR = 1.5
     SWITCH_STATUS_CHANGE_CHECK_TIMEOUT = 2.seconds
     WEB_SOCKET_WAIT_INTERVAL = 0.2.seconds
@@ -24,7 +25,10 @@ module Ewelink
       @phone_number = phone_number.presence.try(:strip)
       @web_socket_authenticated_api_keys = Set.new
       @web_socket_switches_statuses = {}
-      raise(Error.new(":email or :phone_number must be specified")) if email.blank? && phone_number.blank?
+
+      raise(Error.new(':email or :phone_number must be specified')) if email.blank? && phone_number.blank?
+
+      start_web_socket_authentication_check_thread
     end
 
     def press_rf_bridge_button!(uuid)
@@ -301,14 +305,28 @@ module Ewelink
     end
 
     def send_to_web_socket(message)
-      if web_socket_outdated_ping?
-        Ewelink.logger.warn(self.class.name) { 'WebSocket ping is outdated' }
-        reload
-      end
       web_socket.send(message)
     rescue => e
       reload
       raise Error.new(e)
+    end
+
+    def start_web_socket_authentication_check_thread
+      raise Error.new('WebSocket authentication check must only be started once') if @web_socket_authentication_check_thread.present?
+
+      @web_socket_authentication_check_thread = Thread.new do
+        loop do
+          Ewelink.logger.debug(self.class.name) { 'Checking if WebSocket is authenticated' }
+          begin
+            web_socket_wait_for(-> { web_socket_authenticated? }, initialize_web_socket: true) do
+              Ewelink.logger.debug(self.class.name) { 'WebSocket is authenticated' }
+            end
+          rescue => e
+            Ewelink.logger.error(self.class.name) { e }
+          end
+          sleep(WEB_SOCKET_CHECK_AUTHENTICATION_TIMEOUT)
+        end
+      end
     end
 
     def start_web_socket_ping_thread(interval)
@@ -330,14 +348,24 @@ module Ewelink
     end
 
     def web_socket
+      if web_socket_outdated_ping?
+        Ewelink.logger.warn(self.class.name) { 'WebSocket ping is outdated' }
+        reload
+      end
+
       synchronize(:web_socket) do
         next @web_socket if @web_socket
 
+        # Initializes caches before opening WebSocket: important in order to
+        # NOT cumulate requests Timeouts from #web_socket_wait_for.
+        api_keys
+        web_socket_url
+
+        Ewelink.logger.debug(self.class.name) { "Opening WebSocket to #{web_socket_url.inspect}" }
+
         @web_socket_thread = Thread.new do
           EventMachine.run do
-            Ewelink.logger.debug(self.class.name) { "Opening WebSocket to #{web_socket_url.inspect}" }
-
-            @web_socket = Faye::WebSocket::Client.new('wss://as-pconnect3.coolkit.cc:8080/api/ws')
+            @web_socket = Faye::WebSocket::Client.new(web_socket_url)
 
             @web_socket.on(:close) do |event|
               Ewelink.logger.debug(self.class.name) { 'WebSocket closed' }
