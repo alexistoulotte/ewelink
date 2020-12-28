@@ -18,11 +18,12 @@ module Ewelink
 
     attr_reader :email, :password, :phone_number
 
-    def initialize(email: nil, password:, phone_number: nil)
+    def initialize(email: nil, password:, phone_number: nil, update_devices_status_on_connect: false)
       @email = email.presence.try(:strip)
       @mutexs = {}
       @password = password.presence || raise(Error.new(":password must be specified"))
       @phone_number = phone_number.presence.try(:strip)
+      @update_devices_status_on_connect = update_devices_status_on_connect.present?
       @web_socket_authenticated = false
       @web_socket_switches_statuses = {}
 
@@ -196,6 +197,10 @@ module Ewelink
       sleep(SWITCH_STATUS_CHANGE_CHECK_TIMEOUT)
       switch_on?(switch[:uuid]) # Waiting for switch status update
       true
+    end
+
+    def update_devices_status_on_connect?
+      @update_devices_status_on_connect
     end
 
     private
@@ -411,6 +416,7 @@ module Ewelink
               if json['apikey'].present? && !@web_socket_authenticated && json['apikey'] == api_key
                 @web_socket_authenticated = true
                 Ewelink.logger.debug(self.class.name) { "WebSocket successfully authenticated API key: #{json['apikey'].truncate(16).inspect}" }
+                Thread.new { switches.each { |switch| switch_on?(switch[:uuid]) } } if update_devices_status_on_connect?
               end
 
               if json['deviceid'].present? && json['params'].is_a?(Hash) && json['params']['switch'].present?

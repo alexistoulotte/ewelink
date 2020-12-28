@@ -75,6 +75,11 @@ api = Ewelink::Api.new(email: 'john@example.com', password: 'secr$t')
 api.press_rf_bridge_button!(button[:uuid])
 ```
 
+### Additional options
+
+- `update_devices_status_on_connect` (`true` | `false`): To update devices
+  status (on, off) when connecting to Ewelink API (default: `false`).
+
 ### Configuring logger
 
 In order to have some debug informations about what kagu does, you could
