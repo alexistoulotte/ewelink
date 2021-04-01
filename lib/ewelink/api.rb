@@ -18,7 +18,8 @@ module Ewelink
 
     attr_reader :email, :password, :phone_number
 
-    def initialize(email: nil, password:, phone_number: nil, update_devices_status_on_connect: false)
+    def initialize(async_actions: false, email: nil, password:, phone_number: nil, update_devices_status_on_connect: false)
+      @async_actions = async_actions.present?
       @email = email.presence.try(:strip)
       @mutexs = {}
       @password = password.presence || raise(Error.new(":password must be specified"))
@@ -32,25 +33,31 @@ module Ewelink
       start_web_socket_authentication_check_thread
     end
 
+    def async_actions?
+      @async_actions
+    end
+
     def press_rf_bridge_button!(uuid)
-      synchronize(:press_rf_bridge_button) do
-        button = find_rf_bridge_button!(uuid)
-        web_socket_wait_for(-> { web_socket_authenticated? }, initialize_web_socket: true) do
-          params = {
-            'action' => 'update',
-            'apikey' => button[:api_key],
-            'deviceid' => button[:device_id],
-            'params' => {
-              'cmd' => 'transmit',
-              'rfChl' => button[:channel],
-            },
-            'sequence' => web_socket_sequence,
-            'ts' => 0,
-            'userAgent' => 'app',
-          }
-          Ewelink.logger.debug(self.class.name) { "Pressing RF bridge button #{button[:uuid].inspect}" }
-          send_to_web_socket(JSON.generate(params))
-          true
+      process_action do
+        synchronize(:press_rf_bridge_button) do
+          button = find_rf_bridge_button!(uuid)
+          web_socket_wait_for(-> { web_socket_authenticated? }, initialize_web_socket: true) do
+            params = {
+              'action' => 'update',
+              'apikey' => button[:api_key],
+              'deviceid' => button[:device_id],
+              'params' => {
+                'cmd' => 'transmit',
+                'rfChl' => button[:channel],
+              },
+              'sequence' => web_socket_sequence,
+              'ts' => 0,
+              'userAgent' => 'app',
+            }
+            Ewelink.logger.debug(self.class.name) { "Pressing RF bridge button #{button[:uuid].inspect}" }
+            send_to_web_socket(JSON.generate(params))
+            true
+          end
         end
       end
     end
@@ -172,31 +179,33 @@ module Ewelink
     end
 
     def turn_switch!(uuid, on)
-      if ['on', :on, 'true'].include?(on)
-        on = true
-      elsif ['off', :off, 'false'].include?(on)
-        on = false
+      process_action do
+        if ['on', :on, 'true'].include?(on)
+          on = true
+        elsif ['off', :off, 'false'].include?(on)
+          on = false
+        end
+        switch = find_switch!(uuid)
+        @web_socket_switches_statuses[switch[:uuid]] = nil
+        web_socket_wait_for(-> { web_socket_authenticated? }, initialize_web_socket: true) do
+          params = {
+            'action' => 'update',
+            'apikey' => switch[:api_key],
+            'deviceid' => switch[:device_id],
+            'params' => {
+              'switch' => on ? 'on' : 'off',
+            },
+            'sequence' => web_socket_sequence,
+            'ts' => 0,
+            'userAgent' => 'app',
+          }
+          Ewelink.logger.debug(self.class.name) { "Turning switch #{switch[:uuid].inspect} #{on ? 'on' : 'off'}" }
+          send_to_web_socket(JSON.generate(params))
+        end
+        sleep(SWITCH_STATUS_CHANGE_CHECK_TIMEOUT)
+        switch_on?(switch[:uuid]) # Waiting for switch status update
+        true
       end
-      switch = find_switch!(uuid)
-      @web_socket_switches_statuses[switch[:uuid]] = nil
-      web_socket_wait_for(-> { web_socket_authenticated? }, initialize_web_socket: true) do
-        params = {
-          'action' => 'update',
-          'apikey' => switch[:api_key],
-          'deviceid' => switch[:device_id],
-          'params' => {
-            'switch' => on ? 'on' : 'off',
-          },
-          'sequence' => web_socket_sequence,
-          'ts' => 0,
-          'userAgent' => 'app',
-        }
-        Ewelink.logger.debug(self.class.name) { "Turning switch #{switch[:uuid].inspect} #{on ? 'on' : 'off'}" }
-        send_to_web_socket(JSON.generate(params))
-      end
-      sleep(SWITCH_STATUS_CHANGE_CHECK_TIMEOUT)
-      switch_on?(switch[:uuid]) # Waiting for switch status update
-      true
     end
 
     def update_devices_status_on_connect?
@@ -287,6 +296,13 @@ module Ewelink
 
     def nonce
       SecureRandom.hex[0, 8]
+    end
+
+    def process_action(&block)
+      return yield unless async_actions?
+      @async_actions_thread_pool ||= Thread.pool(1)
+      @async_actions_thread_pool.process(&block)
+      nil
     end
 
     def region

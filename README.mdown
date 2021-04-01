@@ -77,6 +77,9 @@ api.press_rf_bridge_button!(button[:uuid])
 
 ### Additional options
 
+- `async_actions` (`true` | `false`): To perform actions (pressing an RF
+  bridge button or turning a switch on/off) in asynchronous mode. (default:
+  `false`).
 - `update_devices_status_on_connect` (`true` | `false`): To update devices
   status (on, off) when connecting to Ewelink API (default: `false`).
 

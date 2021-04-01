@@ -10,6 +10,7 @@ require 'logger'
 require 'openssl'
 require 'optparse'
 require 'set'
+require 'thread/pool'
 require 'timeout'
 
 module Ewelink
