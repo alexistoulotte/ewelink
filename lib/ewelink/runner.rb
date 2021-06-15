@@ -3,7 +3,7 @@ module Ewelink
   class Runner
 
     def run
-      api = Api.new(options.slice(:email, :password, :phone_number))
+      api = Api.new(**options.slice(:email, :password, :phone_number))
       puts(JSON.pretty_generate(api.switches)) if options[:list_switches]
       puts(JSON.pretty_generate(api.rf_bridge_buttons)) if options[:list_rf_bridge_buttons]
       options[:turn_switches_on_uuids].each { |uuid| api.turn_switch!(uuid, :on) }
