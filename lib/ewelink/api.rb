@@ -302,7 +302,7 @@ module Ewelink
       return yield unless async_actions?
       @async_actions_thread_pool ||= Thread.pool(1)
       @async_actions_thread_pool.process(&block)
-      nil
+      true
     end
 
     def region
