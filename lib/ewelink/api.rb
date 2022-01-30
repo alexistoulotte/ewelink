@@ -402,7 +402,7 @@ module Ewelink
               authenticate_web_socket_api_key
             end
 
-            @web_socket.on(:message) do
+            @web_socket.on(:message) do |event|
               message = event.data
 
               if message == 'pong'
