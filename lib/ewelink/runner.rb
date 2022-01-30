@@ -56,23 +56,21 @@ module Ewelink
         end
         arguments = parser.parse!
         if arguments.any?
-          STDERR.puts("Invalid option specified: #{arguments.first}")
-          STDERR.puts(parser.summarize)
+          warn("Invalid option specified: #{arguments.first}")
+          warn(parser.summarize)
           exit(1)
         end
         if options[:email].blank? && options[:phone_number].blank?
-          STDERR.puts('Email or phone number must be specified')
-          STDERR.puts(parser.summarize)
+          warn('Email or phone number must be specified')
+          warn(parser.summarize)
           exit(1)
         end
-        if [:list_switches, :list_rf_bridge_buttons, :turn_switches_on_uuids, :turn_switches_off_uuids, :press_rf_bridge_buttons_uuids, :switch_status_uuids].map { |action| options[action] }.all?(&:blank?)
-          STDERR.puts('An action must be specified (listing switches, press RF bridge button, etc.)')
-          STDERR.puts(parser.summarize)
+        if %i(list_switches list_rf_bridge_buttons turn_switches_on_uuids turn_switches_off_uuids press_rf_bridge_buttons_uuids switch_status_uuids).map { |action| options[action] }.all?(&:blank?)
+          warn('An action must be specified (listing switches, press RF bridge button, etc.)')
+          warn(parser.summarize)
           exit(1)
         end
-        while options[:password].blank?
-          options[:password] = IO::console.getpass("Enter eWeLink account's password: ")
-        end
+        options[:password] = IO.console.getpass("Enter eWeLink account's password: ") while options[:password].blank?
         options
       end
     end

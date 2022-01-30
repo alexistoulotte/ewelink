@@ -2,7 +2,7 @@
 
 require_relative '../lib/ewelink'
 
-Ewelink.logger = Logger.new(STDOUT, formatter: -> (severity, time, progname, message) {
+Ewelink.logger = Logger.new($stdout, formatter: lambda { |_severity, _time, progname, message|
   text = ''
   text << "[#{progname}] " if progname.present?
   text << message.to_s << "\n"
