@@ -9,7 +9,6 @@ module Ewelink
     RF_BRIDGE_DEVICE_UIID = 28
     SWITCH_DEVICES_UIIDS = [1, 5, 6, 24].freeze
     URL = 'https://#{region}-api.coolkit.cc:8080'.freeze
-    UUID_NAMESPACE = 'e25750fb-3710-41af-b831-23224f4dd609'.freeze
     VERSION = 8
     WEB_SOCKET_CHECK_AUTHENTICATION_TIMEOUT = 30.seconds
     WEB_SOCKET_PING_TOLERANCE_FACTOR = 1.5
@@ -115,10 +114,10 @@ module Ewelink
             device_name = device['name'].presence || next
             buttons = device['params']['rfList'].each do |rf|
               button = {
-                api_key: api_key,
+                api_key:,
                 channel: rf['rfChl'],
-                device_id: device_id,
-                device_name: device_name,
+                device_id:,
+                device_name:,
               }
               remote_info = device['tags']['zyx_info'].find { |info| info['buttonName'].find { |data| data.key?(button[:channel].to_s) } }.presence || next
               remote_name = remote_info['name'].try(:squish).presence || next
@@ -126,10 +125,10 @@ module Ewelink
               button_name = button_info.values.first.try(:squish).presence || next
               button.merge!({
                 name: button_name,
-                remote_name: remote_name,
+                remote_name:,
                 remote_type: remote_info['remote_type'],
               })
-              button[:uuid] = Digest::UUID.uuid_v5(UUID_NAMESPACE, "#{button[:device_id]}/#{button[:channel]}")
+              button[:uuid] = Digest::UUID.uuid_v5(Digest::UUID::DNS_NAMESPACE, "#{button[:device_id]}/#{button[:channel]}")
               buttons << button
             end
           end
@@ -167,11 +166,11 @@ module Ewelink
             device_id = device['deviceid'].presence || next
             name = device['name'].presence || next
             switch = {
-              api_key: api_key,
-              device_id: device_id,
-              name: name,
+              api_key:,
+              device_id:,
+              name:,
             }
-            switch[:uuid] = Digest::UUID.uuid_v5(UUID_NAMESPACE, switch[:device_id])
+            switch[:uuid] = Digest::UUID.uuid_v5(Digest::UUID::DNS_NAMESPACE, switch[:device_id])
             switches << switch
           end
         end.tap { |switches| Ewelink.logger.debug(self.class.name) { "Found #{switches.size} switch(es)" } }
@@ -255,7 +254,7 @@ module Ewelink
             params['phoneNumber'] = phone_number
           end
           body = JSON.generate(params)
-          response = rest_request(:post, '/api/user/login', { body: body, headers: { 'Authorization' => "Sign #{Base64.encode64(OpenSSL::HMAC.digest('SHA256', APP_SECRET, body))}" } })
+          response = rest_request(:post, '/api/user/login', { body:, headers: { 'Authorization' => "Sign #{Base64.encode64(OpenSSL::HMAC.digest('SHA256', APP_SECRET, body))}" } })
           raise(Error.new('Authentication token not found')) if response['at'].blank?
           raise(Error.new('API key not found')) if response['user'].blank? || response['user']['apikey'].blank?
           {
@@ -314,7 +313,7 @@ module Ewelink
       method = method.to_s.upcase
       headers = (options[:headers] || {}).reverse_merge('Content-Type' => 'application/json')
       Ewelink.logger.debug(self.class.name) { "#{method} #{url}" }
-      response = HTTParty.send(method.downcase, url, options.merge(headers: headers).reverse_merge(timeout: REQUEST_TIMEOUT))
+      response = HTTParty.send(method.downcase, url, options.merge(headers:).reverse_merge(timeout: REQUEST_TIMEOUT))
       raise(Error.new("#{method} #{url}: #{response.code}")) unless response.success?
       if response['error'] == 301 && response['region'].present?
         @region = response['region']

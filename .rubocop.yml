@@ -1,5 +1,7 @@
 AllCops:
   NewCops: enable
+Gemspec/RequireMFA:
+  Enabled: false
 Gemspec/RequiredRubyVersion:
   Enabled: false
 Layout/LineLength:
@@ -18,6 +20,8 @@ Layout/FirstHashElementIndentation:
   EnforcedStyle: 'consistent'
 Layout/MultilineMethodCallIndentation:
   EnforcedStyle: 'indented'
+Layout/SpaceInLambdaLiteral:
+  EnforcedStyle: 'require_space'
 Lint/AmbiguousBlockAssociation:
   Enabled: false
 Lint/AmbiguousOperatorPrecedence:
@@ -35,6 +39,8 @@ Metrics/CyclomaticComplexity:
 Metrics/MethodLength:
   Enabled: false
 Metrics/PerceivedComplexity:
+  Enabled: false
+Naming/BlockForwarding:
   Enabled: false
 Style/BarePercentLiterals:
   EnforcedStyle: 'percent_q'

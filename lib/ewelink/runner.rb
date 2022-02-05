@@ -9,7 +9,7 @@ module Ewelink
       options[:turn_switches_on_uuids].each { |uuid| api.turn_switch!(uuid, :on) }
       options[:turn_switches_off_uuids].each { |uuid| api.turn_switch!(uuid, :off) }
       options[:press_rf_bridge_buttons_uuids].each { |uuid| api.press_rf_bridge_button!(uuid) }
-      puts(JSON.pretty_generate(options[:switch_status_uuids].map { |uuid| [uuid, api.switch_on?(uuid) ? 'on' : 'off'] }.to_h)) if options[:switch_status_uuids].present?
+      puts(JSON.pretty_generate(options[:switch_status_uuids].to_h { |uuid| [uuid, api.switch_on?(uuid) ? 'on' : 'off'] })) if options[:switch_status_uuids].present?
     end
 
     private
