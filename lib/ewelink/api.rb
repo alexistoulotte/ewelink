@@ -168,6 +168,7 @@ module Ewelink
             switch = {
               api_key:,
               device_id:,
+              model: device['productModel'],
               name:,
             }
             switch[:uuid] = Digest::UUID.uuid_v5(Digest::UUID::DNS_NAMESPACE, switch[:device_id])
